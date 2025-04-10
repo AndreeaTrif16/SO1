@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <errno.h>
+#include <time.h>
 
 #define BASE_DIR "./treasure_hunts"
 #define LOG_FILE "logged_hunt"
@@ -25,12 +26,12 @@ void create_hunt_directory(const char *hunt_id) {
     snprintf(hunt_path, sizeof(hunt_path), "%s/%s", BASE_DIR, hunt_id);
 
     if (mkdir(BASE_DIR, 0777) == -1 && errno != EEXIST) {
-        perror("Error creating base directory");
+        perror("Error creating base directory.");
         exit(1);
     }
 
     if (mkdir(hunt_path, 0777) == -1 && errno != EEXIST) {
-        perror("Error creating hunt directory");
+        perror("Error creating hunt directory.");
         exit(1);
     }
 }
@@ -41,7 +42,7 @@ void log_action(const char *hunt_id, const char *action) {
 
     int fd = open(log_path, O_WRONLY | O_APPEND | O_CREAT, 0644);
     if (fd == -1) {
-        perror("Error opening log file");
+        perror("Error opening log file.");
         return;
     }
     dprintf(fd, "%s\n", action);
@@ -57,10 +58,19 @@ void add_treasure(const char *hunt_id) {
     create_hunt_directory(hunt_id);
 
     struct Treasure t;
-    printf("Enter Treasure ID: "); scanf("%d", &t.treasure_id);
-    printf("Enter Username: "); scanf("%s", t.user_name);
-    printf("Enter Latitude: "); scanf("%f", &t.latitude);
-    printf("Enter Longitude: "); scanf("%f", &t.longitude);
+
+    printf("Enter Treasure ID: "); 
+    scanf("%d", &t.treasure_id);
+
+    printf("Enter Username: "); 
+    scanf("%s", t.user_name);
+
+    printf("Enter Latitude: "); 
+    scanf("%f", &t.latitude);
+
+    printf("Enter Longitude: "); 
+    scanf("%f", &t.longitude);
+
     getchar();  
 
     printf("Enter Clue: "); fgets(t.clue, sizeof(t.clue), stdin);
@@ -73,11 +83,11 @@ void add_treasure(const char *hunt_id) {
 
     int fd = open(treasure_path, O_WRONLY | O_APPEND | O_CREAT, 0644);
     if (fd == -1) {
-        perror("Error opening treasure file");
+        perror("Error opening treasure file.");
         return;
     }
     if (write(fd, &t, sizeof(struct Treasure)) != sizeof(struct Treasure)) {
-        perror("Error writing to treasure file");
+        perror("Error writing to treasure file.");
     }
     close(fd);
 
@@ -92,9 +102,24 @@ void list_treasures(const char *hunt_id) {
 
     int fd = open(treasure_path, O_RDONLY);
     if (fd == -1) {
-        perror("Error opening treasure file");
+        perror("Error opening treasure file.");
         return;
     }
+
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        perror("Can't stat file.");
+        close(fd);
+        return;
+    }
+
+    char mod_time[64];
+    strftime(mod_time, sizeof(mod_time), "%Y-%m-%d %H:%M:%S", localtime(&st.st_mtime));
+
+    printf("Hunt ID: %s\n", hunt_id);
+    printf("File size: %ld bytes\n", st.st_size);
+    printf("Last modified: %s\n", mod_time);
+    printf("\n");
 
     struct Treasure t;
     printf("Treasure List:\n");
@@ -112,7 +137,7 @@ void view_treasure(const char *hunt_id, int treasure_id) {
 
     int fd = open(treasure_path, O_RDONLY);
     if (fd == -1) {
-        perror("Error opening treasure file");
+        perror("Error opening treasure file.");
         return;
     }
 
@@ -137,7 +162,7 @@ void remove_hunt(const char *hunt_id) {
     
     DIR *dir = opendir(hunt_path);
     if (!dir) {
-        perror("Error opening hunt directory");
+        perror("Error opening hunt directory.");
         return;
     }
 
@@ -150,7 +175,7 @@ void remove_hunt(const char *hunt_id) {
 
         snprintf(file_path, sizeof(file_path), "%s/%s", hunt_path, entry->d_name);
         if (remove(file_path) == -1) {
-            perror("Error deleting file");
+            perror("Error deleting file.");
         }
     }
     closedir(dir);
@@ -174,13 +199,13 @@ void remove_treasure(const char *hunt_id, int treasure_id) {
 
     int fd = open(treasure_path, O_RDONLY);
     if (fd == -1) {
-        perror("Error opening treasure file");
+        perror("Error opening treasure file.");
         return;
     }
 
     int temp_fd = open(temp_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (temp_fd == -1) {
-        perror("Error creating temp file");
+        perror("Error creating temp file.");
         close(fd);
         return;
     }
@@ -206,31 +231,47 @@ void remove_treasure(const char *hunt_id, int treasure_id) {
     }
 
     if (rename(temp_path, treasure_path) == -1) {
-        perror("Error replacing old treasure file");
+        perror("Error replacing old treasure file.");
     } else {
         printf("Treasure with ID %d removed successfully from hunt '%s'.\n", treasure_id, hunt_id);
-        log_action(hunt_id, "Removed a treasure");
+        log_action(hunt_id, "Removed a treasure.");
     }
+}
+
+void print_usage(char* arg){
+    printf("Usage:\n");
+    printf("%s --add <hunt_id>\n",arg);
+    printf("%s --list <hunt_id>\n",arg);
+    printf("%s --view <hunt_id> <treasure_id>\n", arg);
+    printf("%s --remove_hunt <hunt_id>\n", arg);
+    printf("%s --remove_treasure <hunt_id> <treasure_id>\n", arg);
 }
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
-        printf("Usage: %s --command hunt_id [args]\n", argv[0]);
+        print_usage(argv[0]);
         return 1;
     }
 
     if (strcmp(argv[1], "--add") == 0) {
         add_treasure(argv[2]);
-    } else if (strcmp(argv[1], "--list") == 0) {
+    } 
+    else if (strcmp(argv[1], "--list") == 0) {
         list_treasures(argv[2]);
-    } else if (strcmp(argv[1], "--view") == 0 && argc == 4) {
+    } 
+    else if (strcmp(argv[1], "--view") == 0 && argc == 4) {
         view_treasure(argv[2], atoi(argv[3]));
-    } else if (strcmp(argv[1], "--remove_hunt") == 0) {
+    } 
+    else if (strcmp(argv[1], "--remove_hunt") == 0) {
         remove_hunt(argv[2]);
-    } else if (strcmp(argv[1], "--remove_treasure") == 0 && argc == 4) {
+    } 
+    else if (strcmp(argv[1], "--remove_treasure") == 0 && argc == 4) {
         remove_treasure(argv[2], atoi(argv[3]));
-    } else {
-        printf("Invalid command\n");
+    } 
+    else {
+        printf("Invalid command!\n");
+        print_usage(argv[0]);
+        
     }
     return 0;
 }
