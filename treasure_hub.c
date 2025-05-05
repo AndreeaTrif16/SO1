@@ -2,107 +2,121 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
-#include <sys/wait.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <errno.h>
 #include <fcntl.h>
 
-pid_t monitor_pid = -1;
-int monitor_running = 0;
+#define CMD_FILE  "hub_cmd.txt"
+
+static pid_t monitor_pid = -1;
+static int   monitor_running = 0;
 
 void sigchld_handler(int sig) {
     int status;
-    pid_t pid = waitpid(monitor_pid, &status, WNOHANG);
-    if (pid > 0) {
-        printf("\nMonitor process ended.\n");
-        monitor_running = 0;
+    pid_t pid;
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (pid == monitor_pid) {
+            monitor_running = 0;
+            if (WIFEXITED(status)) {
+                printf("\nMonitor exited with status %d\n", WEXITSTATUS(status));
+            } else if (WIFSIGNALED(status)) {
+                printf("\nMonitor killed by signal %d\n", WTERMSIG(status));
+            }
+        }
     }
 }
 
-void send_command(const char* command) {
-    int fd = open("command.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd == -1) {
-        perror("open");
+void start_monitor() {
+    if (monitor_running) {
+        printf("Monitor already running (PID %d)\n", monitor_pid);
         return;
     }
-    write(fd, command, strlen(command));
-    close(fd);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        return;
+    }
+    if (pid == 0) {
+        fclose(stdout);
+        fclose(stderr);
+        open("/dev/null", O_WRONLY);
+        dup2(1, 2);
+
+        execl("./treasure_monitor", "treasure_monitor", NULL);
+        perror("execl");
+        exit(1);
+    }
+
+    monitor_pid = pid;
+    monitor_running = 1;
+
+    struct sigaction sa = {
+        .sa_handler = sigchld_handler,
+        .sa_flags   = SA_NOCLDSTOP
+    };
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, NULL);
+
+    printf("Started monitor (PID %d)\n", monitor_pid);
+}
+
+void send_cmd(const char *cmd) {
+    if (!monitor_running) {
+        printf("Error: monitor not running.\n");
+        return;
+    }
+    FILE *f = fopen(CMD_FILE, "w");
+    if (!f) { perror("fopen"); return; }
+
+    fprintf(f, "%s\n", cmd);
+    fflush(f);
+    int fd = fileno(f);
+    fsync(fd);
+    fclose(f);
 
     kill(monitor_pid, SIGUSR1);
 }
 
-int main() {
-    struct sigaction sa;
-    sa.sa_handler = sigchld_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-
-    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
-        perror("sigaction");
-        exit(1);
+void stop_monitor() {
+    if (!monitor_running) {
+        printf("Monitor is not running.\n");
+        return;
     }
+    kill(monitor_pid, SIGUSR2);
+    printf("Sent stop request to monitor.\n");
+}
 
-    char input[256];
+int main() {
+    char line[128];
 
     while (1) {
-        printf("> ");
+        printf("\nhub> ");
         fflush(stdout);
+        if (!fgets(line, sizeof(line), stdin)) break;
+        line[strcspn(line, "\n")] = '\0';
 
-        if (!fgets(input, sizeof(input), stdin)) {
-            break;
+        if      (strcmp(line, "start_monitor") == 0) start_monitor();
+        else if (strcmp(line, "list_hunts")    == 0) send_cmd("list_hunts");
+        else if (strncmp(line, "list_treasures ", 15) == 0) send_cmd(line);
+        else if (strncmp(line, "view_treasure ", 14) == 0) send_cmd(line);
+        else if (strcmp(line, "stop_monitor")   == 0) stop_monitor();
+        else if (strcmp(line, "status")         == 0) {
+            if (monitor_running)
+                printf("Monitor is running (PID %d)\n", monitor_pid);
+            else
+                printf("Monitor is not running.\n");
         }
-        input[strcspn(input, "\n")] = 0;
-
-        if (strcmp(input, "start_monitor") == 0) {
-            if (monitor_running) {
-                printf("Monitor already running.\n");
-                continue;
-            }
-
-            monitor_pid = fork();
-
-            if (monitor_pid == -1) {
-                perror("fork");
-                exit(1);
-            }
-
-            if (monitor_pid == 0) {
-                execl("./treasure_manager", "treasure_manager", "--monitor", NULL);
-                perror("execl");
-                exit(1);
-            }
-
-            monitor_running = 1;
-            printf("Monitor started with PID %d.\n", monitor_pid);
-
-        } 
-        else if (strcmp(input, "list_hunts") == 0) {
-                if (!monitor_running) {
-                    printf("Error: Monitor not running!\n");
-                    continue;
-                }
-                send_command("list_hunts");
-            } 
-        else if (strcmp(input, "stop_monitor") == 0) {
-                if (!monitor_running) {
-                    printf("Error: Monitor not running!\n");
-                    continue;
-                }
-                send_command("stop_monitor");
-                printf("Stopping monitor...\n");
-
-            } 
-        else if (strcmp(input, "exit") == 0) {
-                if (monitor_running) {
-                    printf("Error: Monitor is still running!\n");
-                } else {
-                    printf("Exiting hub.\n");
-                    break;
-                }
-            } 
+        else if (strcmp(line, "exit")           == 0) {
+            if (monitor_running)
+                printf("Error: stop monitor before exit.\n");
+            else
+                break;
+        }
         else {
-            printf("Unknown command.\n");
+            printf("Unknown command: %s\n", line);
         }
     }
-
     return 0;
 }
